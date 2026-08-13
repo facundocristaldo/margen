@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
-import { tcVentaPorFecha, consolidar } from '@/lib/reglas';
+import { tcVentaPorFecha } from '@/lib/reglas';
 import type { Movimiento } from '@/types/domain';
 import clsx from 'clsx';
 
@@ -20,7 +20,7 @@ function generarId(cuentaId: string, fecha: string, concepto: string, importe: n
 interface Repeticion {
     comercio: string;
     importe: number;
-    categoriaId: string;
+    categoriaId: string | null;
     cuentaId: string;
     moneda: 'UYU' | 'USD';
     clase: 'gasto' | 'ingreso';
@@ -33,12 +33,11 @@ export default function PaginaCaptura() {
     const [moneda, setMoneda] = useState<'UYU' | 'USD'>('UYU');
     const [clase, setClase] = useState<ClasePrincipal>('gasto');
     const [categoriaId, setCategoriaId] = useState<string | null>(null);
-    const [comercio, setComercio] = useState<string | null>(null);
-    const [cuentaId, setCuentaId] = useState<string | null>(null);
+    const [comercio, setComercio] = useState('');
+    const [cuentaSeleccionada, setCuentaSeleccionada] = useState<string | null>(null);
     const [guardado, setGuardado] = useState(false);
     const [undoTimer, setUndoTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
     const [ultimoId, setUltimoId] = useState<string | null>(null);
-    const [mostrarConversion, setMostrarConversion] = useState(false);
 
     const perfil = useLiveQuery(() => db.perfilFinanciero.get('perfil'));
     const categorias = useLiveQuery(() => db.categorias.orderBy('ordenFrecuencia').toArray());
@@ -63,7 +62,7 @@ export default function PaginaCaptura() {
                     r: {
                         comercio: m.comercio,
                         importe: Math.abs(m.importe),
-                        categoriaId: m.categoriaId ?? 'efectivo',
+                        categoriaId: m.categoriaId ?? null,
                         cuentaId: m.cuentaId,
                         moneda: m.moneda,
                         clase: (m.clase === 'ingreso' ? 'ingreso' : 'gasto') as ClasePrincipal,
@@ -78,25 +77,19 @@ export default function PaginaCaptura() {
             .map(v => v.r);
     });
 
-    // Tipo de cambio vigente
     const hoy = new Date().toISOString().slice(0, 10);
     const tc = tiposCambio ? tcVentaPorFecha(hoy, tiposCambio) : 40;
 
-    // Conversión del importe ingresado
     const importeNum = parseFloat(importe) || 0;
+    const monedaConvertida = moneda === 'UYU' ? 'USD' : 'UYU';
     const importeConvertido = importeNum > 0
-        ? moneda === 'UYU'
-            ? importeNum / tc          // UYU → USD
-            : importeNum * tc          // USD → UYU
+        ? moneda === 'UYU' ? importeNum / tc : importeNum * tc
         : 0;
-    const monedaConvertida: 'UYU' | 'USD' = moneda === 'UYU' ? 'USD' : 'UYU';
 
-    // Cuenta activa
-    const cuentaActiva = cuentas?.find(c => c.id === cuentaId)
+    const cuentaActiva = cuentas?.find(c => c.id === cuentaSeleccionada)
         ?? cuentas?.find(c => c.tipo === 'tarjeta')
         ?? cuentas?.[0];
 
-    // Categorías ordenadas por hora
     const categoriasOrdenadas = useCallback(() => {
         if (!categorias) return [];
         const hora = new Date().getHours();
@@ -132,38 +125,36 @@ export default function PaginaCaptura() {
         setComercio(r.comercio);
         setMoneda(r.moneda);
         setClase(r.clase);
-        setCuentaId(r.cuentaId);
+        setCuentaSeleccionada(r.cuentaId);
     }
 
-    // Intercambiar moneda conservando el valor en la otra moneda
     function intercambiarMoneda() {
         if (importeNum > 0) {
-            setImporte(importeConvertido.toFixed(monedaConvertida === 'UYU' ? 0 : 2));
+            const convertido = moneda === 'UYU'
+                ? (importeNum / tc).toFixed(2)
+                : Math.round(importeNum * tc).toString();
+            setImporte(convertido);
         }
         setMoneda(m => m === 'UYU' ? 'USD' : 'UYU');
     }
 
     async function guardar() {
         if (!importeNum || importeNum <= 0) return;
-        if (clase === 'gasto' && !categoriaId) return;
 
-        const fecha = hoy;
         const cid = cuentaActiva?.id ?? 'cuenta-pesos';
-        const nombreCom = comercio ?? '';
-        const id = generarId(cid, fecha, nombreCom, importeNum);
-        // gasto → negativo, ingreso → positivo
+        const id = generarId(cid, hoy, comercio, importeNum);
         const signo = clase === 'gasto' ? -1 : 1;
 
         const mov: Movimiento = {
             id,
             cuentaId: cid,
-            fecha,
-            conceptoRaw: nombreCom,
-            comercio: nombreCom || undefined,
+            fecha: hoy,
+            conceptoRaw: comercio,
+            comercio: comercio || undefined,
             importe: signo * importeNum,
             moneda,
             clase,
-            categoriaId: clase === 'gasto' ? (categoriaId ?? undefined) : undefined,
+            categoriaId: categoriaId ?? undefined,
             origen: 'manual',
             estado: 'previsto',
         };
@@ -181,7 +172,7 @@ export default function PaginaCaptura() {
             setGuardado(false);
             setImporte('');
             setCategoriaId(null);
-            setComercio(null);
+            setComercio('');
             setUltimoId(null);
         }, 5000);
         setUndoTimer(timer);
@@ -193,12 +184,17 @@ export default function PaginaCaptura() {
         setGuardado(false);
         setImporte('');
         setCategoriaId(null);
-        setComercio(null);
+        setComercio('');
         setUltimoId(null);
     }
 
-    const puedeGuardar = importeNum > 0 && (clase === 'ingreso' || !!categoriaId);
+    // "Listo" se habilita en cuanto hay un importe > 0
+    // La categoría es opcional (si no se elige queda sin clasificar)
+    const puedeGuardar = importeNum > 0 && !guardado;
     const catActual = categorias?.find(c => c.id === categoriaId);
+
+    const esIngreso = clase === 'ingreso';
+    const colorAccion = esIngreso ? '#16a34a' : 'var(--foreground)';
 
     const TECLAS = [
         ['7', '8', '9'],
@@ -208,32 +204,29 @@ export default function PaginaCaptura() {
     ];
 
     return (
-        <div className="max-w-lg mx-auto flex flex-col min-h-[calc(100vh-64px)]">
+        <div className="max-w-lg mx-auto flex flex-col" style={{ minHeight: 'calc(100dvh - 64px)' }}>
 
-            {/* Header */}
+            {/* ── Header ── */}
             <div className="px-4 pt-5 pb-2 flex items-center justify-between">
                 <h1 className="text-sm font-semibold tracking-widest uppercase" style={{ color: 'var(--muted)' }}>
                     Captura
                 </h1>
-                {/* Selector de cuenta */}
                 <select
                     value={cuentaActiva?.id ?? ''}
-                    onChange={e => setCuentaId(e.target.value)}
-                    className="text-xs px-2 py-1 rounded-full min-h-[32px]"
+                    onChange={e => setCuentaSeleccionada(e.target.value)}
+                    className="text-xs px-2 py-1 rounded-full min-h-8"
                     style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
                     aria-label="Cuenta"
                 >
-                    {cuentas?.map(c => (
-                        <option key={c.id} value={c.id}>{c.nombre}</option>
-                    ))}
+                    {cuentas?.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                 </select>
             </div>
 
-            <div className="flex-1 flex flex-col px-4 gap-3">
+            <div className="flex-1 flex flex-col px-4 gap-3 overflow-y-auto">
 
-                {/* Toggle gasto / ingreso */}
+                {/* ── Toggle gasto / ingreso ── */}
                 <div
-                    className="flex rounded-xl overflow-hidden self-center"
+                    className="flex rounded-xl overflow-hidden self-center w-full"
                     style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
                     role="group"
                     aria-label="Tipo de movimiento"
@@ -243,14 +236,11 @@ export default function PaginaCaptura() {
                             key={t}
                             onClick={() => setClase(t)}
                             aria-pressed={clase === t}
-                            className="px-5 py-2 text-sm font-medium capitalize transition-all min-h-11"
+                            className="flex-1 py-2.5 text-sm font-semibold transition-all min-h-11"
                             style={
                                 clase === t
-                                    ? {
-                                        background: t === 'gasto' ? 'var(--foreground)' : 'var(--color-ok)',
-                                        color: 'white',
-                                    }
-                                    : {}
+                                    ? { background: t === 'gasto' ? 'var(--foreground)' : '#16a34a', color: 'white' }
+                                    : { color: 'var(--muted)' }
                             }
                         >
                             {t === 'gasto' ? '↑ Gasto' : '↓ Ingreso'}
@@ -258,99 +248,90 @@ export default function PaginaCaptura() {
                     ))}
                 </div>
 
-                {/* Importe + selector de moneda */}
-                <div className="text-center pt-2">
-                    {/* Selector UYU / USD */}
-                    <div className="flex items-center justify-center gap-2 mb-2">
-                        <button
-                            onClick={() => setMoneda('UYU')}
-                            aria-pressed={moneda === 'UYU'}
-                            className="px-3 py-1 rounded-full text-sm font-semibold transition-all min-h-9"
-                            style={
-                                moneda === 'UYU'
-                                    ? { background: 'var(--foreground)', color: 'var(--background)' }
-                                    : { background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }
-                            }
-                        >
-                            $ UYU
-                        </button>
-                        <button
-                            onClick={intercambiarMoneda}
-                            className="text-base px-2 transition-transform active:scale-110"
-                            style={{ color: 'var(--muted)' }}
-                            aria-label="Intercambiar moneda"
-                            title={`TC: ${tc.toLocaleString('es-UY', { maximumFractionDigits: 2 })}`}
-                        >
-                            ⇄
-                        </button>
-                        <button
-                            onClick={() => setMoneda('USD')}
-                            aria-pressed={moneda === 'USD'}
-                            className="px-3 py-1 rounded-full text-sm font-semibold transition-all min-h-9"
-                            style={
-                                moneda === 'USD'
-                                    ? { background: 'var(--foreground)', color: 'var(--background)' }
-                                    : { background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }
-                            }
-                        >
-                            USD
-                        </button>
+                {/* ── Display del importe ── */}
+                <div
+                    className="rounded-2xl px-4 py-4 text-center"
+                    style={{
+                        background: 'var(--surface)',
+                        border: `2px solid ${puedeGuardar ? colorAccion : 'var(--border)'}`,
+                        transition: 'border-color 0.15s',
+                    }}
+                >
+                    {/* Selector moneda */}
+                    <div className="flex items-center justify-center gap-2 mb-3">
+                        {(['UYU', 'USD'] as const).map(m => (
+                            <button
+                                key={m}
+                                onClick={() => m !== moneda && intercambiarMoneda()}
+                                aria-pressed={moneda === m}
+                                className="px-3 py-1 rounded-full text-sm font-semibold transition-all min-h-9"
+                                style={
+                                    moneda === m
+                                        ? { background: colorAccion, color: 'white' }
+                                        : { background: 'var(--background)', border: '1px solid var(--border)', color: 'var(--muted)' }
+                                }
+                            >
+                                {m === 'UYU' ? '$ UYU' : 'USD'}
+                            </button>
+                        ))}
                     </div>
 
-                    {/* Número grande */}
+                    {/* Número principal */}
                     <div
-                        className={clsx(
-                            'tabnum font-bold leading-none transition-opacity',
-                            importe ? 'opacity-100' : 'opacity-30',
-                            clase === 'ingreso' ? 'estado-ok' : ''
-                        )}
-                        style={{ fontSize: 'clamp(2.5rem, 14vw, 5rem)' }}
-                        aria-label={`Importe: ${importe || '0'} ${moneda}`}
+                        className="tabnum font-bold leading-none"
+                        style={{
+                            fontSize: 'clamp(2.8rem, 15vw, 5rem)',
+                            color: importeNum > 0 ? (esIngreso ? '#16a34a' : 'var(--foreground)') : 'var(--border)',
+                        }}
+                        aria-live="polite"
+                        aria-label={`${importe || '0'} ${moneda}`}
                     >
                         {moneda === 'USD' ? 'USD ' : '$ '}
                         {importe || '0'}
+                        {/* Cursor parpadeante */}
+                        {!guardado && (
+                            <span
+                                className="inline-block w-0.5 h-[0.85em] ml-1 rounded-sm align-middle animate-pulse"
+                                style={{ background: colorAccion, opacity: 0.8 }}
+                                aria-hidden="true"
+                            />
+                        )}
                     </div>
 
-                    {/* Conversión en vivo */}
+                    {/* Equivalencia en la otra moneda */}
                     {importeNum > 0 && (
-                        <button
-                            onClick={() => setMostrarConversion(v => !v)}
-                            className="mt-1 text-sm tabnum"
-                            style={{ color: 'var(--muted)' }}
-                            aria-label="Ver conversión"
-                        >
+                        <div className="mt-2 text-sm tabnum" style={{ color: 'var(--muted)' }}>
                             ≈ {monedaConvertida === 'USD' ? 'USD ' : '$ '}
                             {importeConvertido.toLocaleString('es-UY', {
                                 minimumFractionDigits: monedaConvertida === 'USD' ? 2 : 0,
                                 maximumFractionDigits: monedaConvertida === 'USD' ? 2 : 0,
                             })}
-                            {' '}
-                            <span className="text-xs">(TC {tc.toLocaleString('es-UY', { maximumFractionDigits: 2 })})</span>
-                        </button>
+                            <span className="text-xs ml-1 opacity-60">TC {tc.toLocaleString('es-UY', { maximumFractionDigits: 1 })}</span>
+                        </div>
                     )}
 
-                    {/* Comercio / descripción */}
+                    {/* Categoría y comercio seleccionados */}
                     {(catActual || comercio) && (
-                        <div className="mt-1 text-sm flex items-center justify-center gap-1" style={{ color: 'var(--muted)' }}>
-                            {catActual && <span>{catActual.icono}</span>}
-                            {catActual && <span>{catActual.nombre}</span>}
-                            {comercio && <span>· {comercio}</span>}
+                        <div className="mt-2 text-sm flex items-center justify-center gap-1" style={{ color: 'var(--muted)' }}>
+                            {catActual && <span>{catActual.icono} {catActual.nombre}</span>}
+                            {comercio && catActual && <span>·</span>}
+                            {comercio && <span className="truncate max-w-[140px]">{comercio}</span>}
                         </div>
                     )}
                 </div>
 
-                {/* Campo comercio / descripción */}
+                {/* ── Campo comercio / descripción ── */}
                 <input
                     type="text"
-                    placeholder={clase === 'ingreso' ? 'Descripción (ej: Factura cliente)' : 'Comercio (opcional)'}
-                    value={comercio ?? ''}
-                    onChange={e => setComercio(e.target.value || null)}
+                    placeholder={esIngreso ? 'Descripción (ej: Factura cliente)' : 'Comercio (opcional)'}
+                    value={comercio}
+                    onChange={e => setComercio(e.target.value)}
                     className="w-full rounded-xl px-4 py-3 text-sm min-h-11"
                     style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
-                    aria-label="Comercio o descripción"
+                    aria-label={esIngreso ? 'Descripción' : 'Comercio'}
                 />
 
-                {/* REPETIR */}
+                {/* ── REPETIR ── */}
                 {repeticiones && repeticiones.length > 0 && (
                     <div>
                         <div className="text-xs uppercase tracking-widest mb-2" style={{ color: 'var(--muted)' }}>
@@ -363,15 +344,14 @@ export default function PaginaCaptura() {
                                     onClick={() => usarRepeticion(r)}
                                     className="text-left rounded-xl px-3 py-2 text-sm transition-opacity active:opacity-70"
                                     style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
-                                    aria-label={`Repetir: ${r.comercio} ${r.importe} ${r.moneda}`}
+                                    aria-label={`Repetir ${r.comercio} ${r.importe} ${r.moneda}`}
                                 >
-                                    <div className="font-medium truncate flex items-center gap-1">
-                                        {r.clase === 'ingreso' && <span className="estado-ok text-xs">↓</span>}
+                                    <div className="font-medium truncate">
+                                        {r.clase === 'ingreso' && <span className="text-green-600 mr-1">↓</span>}
                                         {r.comercio}
                                     </div>
                                     <div className="tabnum text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                                        {r.moneda === 'USD' ? 'USD ' : '$ '}
-                                        {r.importe.toLocaleString('es-UY')}
+                                        {r.moneda === 'USD' ? 'USD ' : '$ '}{r.importe.toLocaleString('es-UY')}
                                     </div>
                                 </button>
                             ))}
@@ -379,53 +359,56 @@ export default function PaginaCaptura() {
                     </div>
                 )}
 
-                {/* Categorías — solo para gastos */}
+                {/* ── Categorías (solo gastos) ── */}
                 {clase === 'gasto' && (
-                    <div className="flex flex-wrap gap-2">
-                        {categoriasOrdenadas().slice(0, 6).map(cat => (
-                            <button
-                                key={cat.id}
-                                onClick={() => setCategoriaId(cat.id)}
-                                className="flex items-center gap-1 rounded-full px-3 py-1.5 text-sm font-medium transition-all min-h-11"
-                                style={
-                                    categoriaId === cat.id
-                                        ? { background: 'var(--foreground)', color: 'var(--background)' }
-                                        : { background: 'var(--surface)', border: '1px solid var(--border)' }
-                                }
-                                aria-pressed={categoriaId === cat.id}
-                                aria-label={cat.nombre}
-                            >
-                                <span>{cat.icono}</span>
-                                <span>{cat.nombre}</span>
-                            </button>
-                        ))}
-                        <button
-                            className="rounded-full px-3 py-1.5 text-sm min-h-11"
-                            style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
-                        >
-                            ⋯ Más
-                        </button>
+                    <div>
+                        {!categoriaId && importeNum > 0 && (
+                            <div className="text-xs mb-2 font-medium" style={{ color: 'var(--color-warn)' }}>
+                                Elegí una categoría o guardá sin clasificar
+                            </div>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                            {categoriasOrdenadas().slice(0, 6).map(cat => (
+                                <button
+                                    key={cat.id}
+                                    onClick={() => setCategoriaId(prev => prev === cat.id ? null : cat.id)}
+                                    aria-pressed={categoriaId === cat.id}
+                                    className="flex items-center gap-1 rounded-full px-3 py-1.5 text-sm font-medium transition-all min-h-11"
+                                    style={
+                                        categoriaId === cat.id
+                                            ? { background: 'var(--foreground)', color: 'var(--background)', outline: '2px solid var(--foreground)', outlineOffset: '2px' }
+                                            : { background: 'var(--surface)', border: '1px solid var(--border)' }
+                                    }
+                                >
+                                    <span>{cat.icono}</span>
+                                    <span>{cat.nombre}</span>
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 )}
 
-                {/* Teclado numérico */}
-                <div className="grid grid-cols-4 gap-2 pb-4">
+            </div>
+
+            {/* ── Teclado numérico — fijo al fondo ── */}
+            <div className="px-4 pb-3 pt-2 shrink-0">
+                <div className="grid grid-cols-4 gap-2">
                     {TECLAS.flat().map((tecla, i) => {
                         if (i === 11) {
                             return (
                                 <button
                                     key="listo"
                                     onClick={guardar}
-                                    disabled={!puedeGuardar || guardado}
+                                    disabled={!puedeGuardar}
                                     className={clsx(
-                                        'col-span-1 rounded-xl font-semibold text-base transition-all min-h-14',
-                                        'flex items-center justify-center',
-                                        puedeGuardar && !guardado ? 'active:opacity-70' : 'opacity-30 cursor-not-allowed'
+                                        'col-span-1 rounded-xl font-semibold text-sm transition-all min-h-14',
+                                        'flex items-center justify-center gap-1',
+                                        puedeGuardar ? 'active:scale-95' : 'opacity-25 cursor-not-allowed'
                                     )}
                                     style={
-                                        puedeGuardar && !guardado
-                                            ? { background: clase === 'ingreso' ? 'var(--color-ok)' : 'var(--foreground)', color: 'white' }
-                                            : { background: 'var(--surface)' }
+                                        puedeGuardar
+                                            ? { background: colorAccion, color: 'white' }
+                                            : { background: 'var(--surface)', border: '1px solid var(--border)' }
                                     }
                                     aria-label="Guardar"
                                 >
@@ -437,7 +420,7 @@ export default function PaginaCaptura() {
                             <button
                                 key={tecla}
                                 onClick={() => presionarTecla(tecla)}
-                                className="rounded-xl font-mono text-xl font-medium min-h-14 transition-all active:opacity-50 flex items-center justify-center"
+                                className="rounded-xl font-mono text-xl font-medium min-h-14 transition-all active:scale-95 active:opacity-70 flex items-center justify-center select-none"
                                 style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
                                 aria-label={tecla === '⌫' ? 'Borrar' : tecla}
                             >
@@ -448,19 +431,16 @@ export default function PaginaCaptura() {
                 </div>
             </div>
 
-            {/* Toast con undo */}
+            {/* ── Toast con undo ── */}
             {guardado && (
                 <div
                     className="fixed bottom-24 left-4 right-4 max-w-lg mx-auto rounded-xl px-4 py-3 flex items-center justify-between z-50 shadow-lg"
-                    style={{
-                        background: clase === 'ingreso' ? 'var(--color-ok)' : 'var(--foreground)',
-                        color: 'white',
-                    }}
+                    style={{ background: colorAccion, color: 'white' }}
                     role="status"
                     aria-live="polite"
                 >
                     <span className="text-sm">
-                        {clase === 'ingreso' ? '↓ Ingreso' : '↑ Gasto'} guardado —{' '}
+                        {esIngreso ? '↓ Ingreso' : '↑ Gasto'} guardado —{' '}
                         {moneda === 'USD' ? 'USD ' : '$ '}{importe}
                         {importeNum > 0 && (
                             <span className="opacity-70 ml-1 text-xs">
@@ -469,11 +449,7 @@ export default function PaginaCaptura() {
                             </span>
                         )}
                     </span>
-                    <button
-                        onClick={deshacer}
-                        className="text-sm font-semibold underline ml-4"
-                        aria-label="Deshacer"
-                    >
+                    <button onClick={deshacer} className="text-sm font-semibold underline ml-4" aria-label="Deshacer">
                         Deshacer
                     </button>
                 </div>
