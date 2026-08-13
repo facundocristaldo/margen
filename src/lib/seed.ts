@@ -72,7 +72,9 @@ export const COMERCIOS_SEMILLA: Record<string, string> = {
 
 export async function sembrarDatosIniciales() {
     const cuentasCount = await db.cuentas.count();
-    if (cuentasCount > 0) return; // ya sembrado
+    const categoriasCount = await db.categorias.count();
+    // Re-sembrar categorías si la migración v1→v2 las dejó sin índice
+    if (cuentasCount > 0 && categoriasCount > 0) return;
 
     await db.transaction('rw', [db.categorias, db.reglasClasificacion, db.cuentas, db.ciclosTarjeta, db.perfilFinanciero], async () => {
         await db.categorias.bulkPut(CATEGORIAS_SEMILLA);

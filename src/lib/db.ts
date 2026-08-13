@@ -28,6 +28,7 @@ export class MargenDB extends Dexie {
 
     constructor() {
         super('MargenDB');
+        // v1 — schema original (sin ordenFrecuencia indexado en categorias)
         this.version(1).stores({
             cuentas: 'id, tipo, moneda',
             ciclosTarjeta: 'id, cuentaId',
@@ -39,6 +40,20 @@ export class MargenDB extends Dexie {
             gastosPlanificados: 'id, estado, prioridad',
             aportesAhorro: 'id, metaId, mes',
             categorias: 'id, padreId, colorSlot',
+            reglasClasificacion: 'id, prioridad',
+        });
+        // v2 — agrega índice ordenFrecuencia en categorias
+        this.version(2).stores({
+            cuentas: 'id, tipo, moneda',
+            ciclosTarjeta: 'id, cuentaId',
+            movimientos: 'id, cuentaId, fecha, clase, estado, categoriaId, planId, origen',
+            planesDeCuotas: 'id, cuentaId, estado, primeraCuota',
+            compromisosRecurrentes: 'id, tipo, frecuencia',
+            perfilFinanciero: 'id',
+            tiposDeCambio: 'id, fecha',
+            gastosPlanificados: 'id, estado, prioridad',
+            aportesAhorro: 'id, metaId, mes',
+            categorias: 'id, padreId, colorSlot, ordenFrecuencia',
             reglasClasificacion: 'id, prioridad',
         });
     }
