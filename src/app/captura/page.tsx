@@ -200,7 +200,6 @@ export default function PaginaCaptura() {
         ['7', '8', '9'],
         ['4', '5', '6'],
         ['1', '2', '3'],
-        ['.', '0', '⌫'],
     ];
 
     return (
@@ -392,42 +391,51 @@ export default function PaginaCaptura() {
 
             {/* ── Teclado numérico — fijo al fondo ── */}
             <div className="px-4 pb-3 pt-2 shrink-0">
+                {/* Filas 1-3: dígitos, 3 columnas */}
+                <div className="grid grid-cols-3 gap-2 mb-2">
+                    {TECLAS.slice(0, 3).flat().map(tecla => (
+                        <button
+                            key={tecla}
+                            onClick={() => presionarTecla(tecla)}
+                            className="rounded-xl font-mono text-xl font-medium min-h-14 transition-all active:scale-95 active:opacity-70 flex items-center justify-center select-none"
+                            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+                            aria-label={tecla}
+                        >
+                            {tecla}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Última fila: punto · cero · ⌫ · Listo (4 columnas) */}
                 <div className="grid grid-cols-4 gap-2">
-                    {TECLAS.flat().map((tecla, i) => {
-                        if (i === 11) {
-                            return (
-                                <button
-                                    key="listo"
-                                    onClick={guardar}
-                                    disabled={!puedeGuardar}
-                                    className={clsx(
-                                        'col-span-1 rounded-xl font-semibold text-sm transition-all min-h-14',
-                                        'flex items-center justify-center gap-1',
-                                        puedeGuardar ? 'active:scale-95' : 'opacity-25 cursor-not-allowed'
-                                    )}
-                                    style={
-                                        puedeGuardar
-                                            ? { background: colorAccion, color: 'white' }
-                                            : { background: 'var(--surface)', border: '1px solid var(--border)' }
-                                    }
-                                    aria-label="Guardar"
-                                >
-                                    ✓ Listo
-                                </button>
-                            );
+                    {['.', '0', '⌫'].map(tecla => (
+                        <button
+                            key={tecla}
+                            onClick={() => presionarTecla(tecla)}
+                            className="rounded-xl font-mono text-xl font-medium min-h-14 transition-all active:scale-95 active:opacity-70 flex items-center justify-center select-none"
+                            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+                            aria-label={tecla === '⌫' ? 'Borrar' : tecla}
+                        >
+                            {tecla}
+                        </button>
+                    ))}
+                    <button
+                        onClick={guardar}
+                        disabled={!puedeGuardar}
+                        className={clsx(
+                            'rounded-xl font-semibold text-sm transition-all min-h-14',
+                            'flex items-center justify-center',
+                            puedeGuardar ? 'active:scale-95' : 'opacity-25 cursor-not-allowed'
+                        )}
+                        style={
+                            puedeGuardar
+                                ? { background: colorAccion, color: 'white' }
+                                : { background: 'var(--surface)', border: '1px solid var(--border)' }
                         }
-                        return (
-                            <button
-                                key={tecla}
-                                onClick={() => presionarTecla(tecla)}
-                                className="rounded-xl font-mono text-xl font-medium min-h-14 transition-all active:scale-95 active:opacity-70 flex items-center justify-center select-none"
-                                style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
-                                aria-label={tecla === '⌫' ? 'Borrar' : tecla}
-                            >
-                                {tecla}
-                            </button>
-                        );
-                    })}
+                        aria-label="Guardar"
+                    >
+                        ✓ Listo
+                    </button>
                 </div>
             </div>
 
