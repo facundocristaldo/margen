@@ -74,7 +74,7 @@ export async function sembrarDatosIniciales() {
     const cuentasCount = await db.cuentas.count();
     if (cuentasCount > 0) return; // ya sembrado
 
-    await db.transaction('rw', [db.categorias, db.reglasClasificacion, db.cuentas, db.perfilFinanciero], async () => {
+    await db.transaction('rw', [db.categorias, db.reglasClasificacion, db.cuentas, db.ciclosTarjeta, db.perfilFinanciero], async () => {
         await db.categorias.bulkPut(CATEGORIAS_SEMILLA);
         await db.reglasClasificacion.bulkPut(REGLAS_SEMILLA);
 
